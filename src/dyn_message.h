@@ -35,6 +35,7 @@
 #define MAX_ALLOWABLE_PROCESSED_MSGS  500
 
 typedef void (*func_msg_parse_t)(struct msg *);
+typedef rstatus_t (*func_msg_fragment_t)(struct msg *, uint32_t, struct msg_tqh *);
 typedef rstatus_t (*func_msg_post_splitcopy_t)(struct msg *);
 typedef void (*func_msg_coalesce_t)(struct msg *r);
 typedef rstatus_t (*msg_response_handler_t)(struct msg *req, struct msg *rsp);
@@ -45,6 +46,7 @@ extern func_mbuf_copy_t     g_pre_splitcopy;   /* message pre-split copy */
 extern func_msg_post_splitcopy_t g_post_splitcopy;  /* message post-split copy */
 extern func_msg_coalesce_t  g_pre_coalesce;    /* message pre-coalesce */
 extern func_msg_coalesce_t  g_post_coalesce;   /* message post-coalesce */
+extern func_msg_fragment_t  g_fragment;   /* message fragment */
 
 
 typedef enum msg_parse_result {
@@ -351,8 +353,7 @@ struct msg {
 
     msg_type_t           type;            /* message type */
 
-    uint8_t              *key_start;      /* key start */
-    uint8_t              *key_end;        /* key end */
+    struct array         *keys;           /* array of keypos, for req */
 
     uint32_t             vlen;            /* value length (memcache) */
     uint8_t              *end;            /* end marker (memcache) */
@@ -367,6 +368,7 @@ struct msg {
     struct msg           *frag_owner;     /* owner of fragment message */
     uint32_t             nfrag;           /* # fragment */
     uint64_t             frag_id;         /* id of fragmented message */
+    struct msg           **frag_seq;      /* sequence of fragment message, map from keys to fragments*/
 
     err_t                error_code;      /* errno on error? */
     unsigned             is_error:1;      /* error? */
@@ -443,6 +445,7 @@ void msg_dump(struct msg *msg);
 bool msg_empty(struct msg *msg);
 rstatus_t msg_recv(struct context *ctx, struct conn *conn);
 rstatus_t msg_send(struct context *ctx, struct conn *conn);
+uint64_t msg_gen_frag_id(void);
 size_t msg_alloc_msgs(void);
 uint32_t msg_payload_crc32(struct msg *msg);
 struct msg *msg_get_rsp_integer(struct conn *conn);

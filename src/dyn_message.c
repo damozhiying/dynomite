@@ -185,12 +185,14 @@ set_datastore_ops(void)
             g_post_splitcopy = redis_post_splitcopy;
             g_pre_coalesce = redis_pre_coalesce;
             g_post_coalesce = redis_post_coalesce;
+            g_fragment =  redis_fragment;
             break;
         case DATA_MEMCACHE:
             g_pre_splitcopy = memcache_pre_splitcopy;
             g_post_splitcopy = memcache_post_splitcopy;
             g_pre_coalesce = memcache_pre_coalesce;
             g_post_coalesce = memcache_post_coalesce;
+            g_fragment =  NULL;
             break;
         default:
             return;
@@ -342,6 +344,12 @@ done:
 
     msg->type = MSG_UNKNOWN;
 
+    msg->keys = array_create(1, sizeof(struct keypos));
+    if (msg->keys == NULL) {
+        dn_free(msg);
+        return NULL;
+    }
+
     msg->key_start = NULL;
     msg->key_end = NULL;
 
@@ -349,6 +357,7 @@ done:
     msg->end = NULL;
 
     msg->frag_owner = NULL;
+    msg->frag_seq = NULL;
     msg->nfrag = 0;
     msg->frag_id = 0;
 
@@ -599,6 +608,17 @@ msg_put(struct msg *msg)
         mbuf_put(mbuf);
     }
 
+    if (msg->frag_seq) {
+        dn_free(msg->frag_seq);
+        msg->frag_seq = NULL;
+    }
+
+    if (msg->keys) {
+        msg->keys->nelem = 0;
+        array_destroy(msg->keys);
+        msg->keys = NULL;
+    }
+
     nfree_msgq++;
     TAILQ_INSERT_HEAD(&free_msgq, msg, m_tqe);
 }
@@ -704,7 +724,12 @@ msg_get_key(struct msg *req, const struct string *hash_tag, uint32_t *keylen)
 {
     uint8_t *key = NULL;
     *keylen = 0;
-    if (!string_empty(hash_tag)) {
+    if (array_n(req->keys) == 0)
+        return NULL;
+    kpos = array_get(req->keys, 0);
+    *keylen = (uint32_t)(kpos->end - kpos->start);
+    key = kpos->start;
+    /*if (!string_empty(hash_tag)) {
         uint8_t *tag_start, *tag_end;
 
         tag_start = dn_strchr(req->key_start, req->key_end, hash_tag->data[0]);
@@ -720,7 +745,7 @@ msg_get_key(struct msg *req, const struct string *hash_tag, uint32_t *keylen)
     if (*keylen == 0) {
         key = req->key_start;
         *keylen = (uint32_t)(req->key_end - req->key_start);
-    }
+    }*/
     return key;
 }
 
@@ -756,6 +781,12 @@ msg_payload_crc32(struct msg *rsp)
     }
     return crc;
 
+}
+
+inline uint64_t
+msg_gen_frag_id(void)
+{
+    return ++frag_id;
 }
 
 static rstatus_t
@@ -876,7 +907,7 @@ msg_fragment(struct context *ctx, struct conn *conn, struct msg *msg)
      *
      */
     if (msg->frag_id == 0) {
-        msg->frag_id = ++frag_id;
+        msg->frag_id = msg_gen_frag_id();
         msg->first_fragment = 1;
         msg->nfrag = 1;
         msg->frag_owner = msg;
