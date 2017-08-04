@@ -2474,90 +2474,6 @@ redis_copy_bulk(struct msg *dst, struct msg *src)
 }
 
 /*
- * Pre-split copy handler invoked when the request is a multi vector -
- * 'mget' or 'del' request and is about to be split into two requests
- */
-void
-redis_pre_splitcopy(struct mbuf *mbuf, void *arg)
-{
-    struct msg *req = arg;
-    int n;
-
-    ASSERT(req->is_request);
-    ASSERT(req->narg > 1);
-    ASSERT(mbuf_empty(mbuf));
-
-    switch (req->type) {
-    case MSG_REQ_REDIS_MGET:
-        n = dn_snprintf(mbuf->last, mbuf_size(mbuf), "*%d\r\n$4\r\nmget\r\n",
-                        req->narg - 1);
-        break;
-
-     case MSG_REQ_REDIS_MSET:
-        n = dn_snprintf(mbuf->last, mbuf_size(mbuf), "*%d\r\n$4\r\nmset\r\n",
-                        req->narg - 2);
-        break;
-
-    case MSG_REQ_REDIS_DEL:
-        n = dn_snprintf(mbuf->last, mbuf_size(mbuf), "*%d\r\n$3\r\ndel\r\n",
-                        req->narg - 1);
-        break;
-
-    default:
-        n = 0;
-        NOT_REACHED();
-    }
-
-    mbuf->last += n;
-}
-
-/*
- * Post-split copy handler invoked when the request is a multi vector -
- * 'mget' or 'del' request and has already been split into two requests
- */
-rstatus_t
-redis_post_splitcopy(struct msg *req)
-{
-    struct mbuf *hbuf, *nhbuf;         /* head mbuf and new head mbuf */
-    struct string hstr = string("*2"); /* header string */
-    if (req->type == MSG_REQ_REDIS_MSET) {
-        string_set_text(&hstr, "*3");
-    }
-
-    ASSERT(req->is_request);
-    ASSERT(req->type == MSG_REQ_REDIS_MGET || req->type == MSG_REQ_REDIS_DEL ||
-           req->type == MSG_REQ_REDIS_MSET);
-    ASSERT(!STAILQ_EMPTY(&req->mhdr));
-
-    nhbuf = mbuf_get();
-    if (nhbuf == NULL) {
-        return DN_ENOMEM;
-    }
-
-    /*
-     * Fix the head mbuf in the head (A) msg. The fix is straightforward
-     * as we just need to skip over the narg token
-     */
-    hbuf = STAILQ_FIRST(&req->mhdr);
-    ASSERT(hbuf->pos == req->narg_start);
-    ASSERT(hbuf->pos < req->narg_end && req->narg_end <= hbuf->last);
-    hbuf->pos = req->narg_end;
-
-    /*
-     * Add a new head mbuf in the head (A) msg that just contains '*2'
-     * token
-     */
-    STAILQ_INSERT_HEAD(&req->mhdr, nhbuf, next);
-    mbuf_copy(nhbuf, hstr.data, hstr.len);
-
-    /* fix up the narg_start and narg_end */
-    req->narg_start = nhbuf->pos;
-    req->narg_end = nhbuf->last;
-
-    return DN_OK;
-}
-
-/*
  * Pre-coalesce handler is invoked when the message is a response to
  * the fragmented multi vector request - 'mget' or 'del' and all the
  * responses to the fragmented request vector hasn't been received
@@ -2732,7 +2648,7 @@ redis_append_key(struct msg *r, uint8_t *key, uint32_t keylen)
     struct keypos *kpos;
 
     /* 1. keylen */
-    len = (uint32_t)nc_snprintf(printbuf, sizeof(printbuf), "$%d\r\n", keylen);
+    len = (uint32_t)dn_snprintf(printbuf, sizeof(printbuf), "$%d\r\n", keylen);
     mbuf = msg_ensure_mbuf(r, len);
     if (mbuf == NULL) {
         return DN_ENOMEM;
@@ -2764,7 +2680,7 @@ redis_append_key(struct msg *r, uint8_t *key, uint32_t keylen)
     mbuf_copy(mbuf, (uint8_t *)CRLF, CRLF_LEN);
     r->mlen += (uint32_t)CRLF_LEN;
 
-    return NC_OK;
+    return DN_OK;
 }
 
 /*
@@ -2869,7 +2785,7 @@ redis_fragment_argx(struct msg *r, struct server_pool *pool, struct rack *rack,
                                                       kpos->end - kpos->start);
 
         if (sub_msgs[idx] == NULL) {
-            sub_msgs[idx] = msg_get(r->owner, r->request, __FUNCTION__);
+            sub_msgs[idx] = msg_get(r->owner, r->is_request, __FUNCTION__);
             if (sub_msgs[idx] == NULL) {
                 dn_free(sub_msgs);
                 return DN_ENOMEM;
@@ -2879,8 +2795,8 @@ redis_fragment_argx(struct msg *r, struct server_pool *pool, struct rack *rack,
 
         sub_msg->narg++;
         status = redis_append_key(sub_msg, kpos->start, kpos->end - kpos->start);
-        if (status != NC_OK) {
-            nc_free(sub_msgs);
+        if (status != DN_OK) {
+            dn_free(sub_msgs);
             return status;
         }
 
@@ -2888,14 +2804,14 @@ redis_fragment_argx(struct msg *r, struct server_pool *pool, struct rack *rack,
             continue;
         } else {                                        /* mset */
             status = redis_copy_bulk(NULL, r);          /* eat key */
-            if (status != NC_OK) {
-                nc_free(sub_msgs);
+            if (status != DN_OK) {
+                dn_free(sub_msgs);
                 return status;
             }
 
             status = redis_copy_bulk(sub_msg, r);
-            if (status != NC_OK) {
-                nc_free(sub_msgs);
+            if (status != DN_OK) {
+                dn_free(sub_msgs);
                 return status;
             }
 
@@ -2921,7 +2837,7 @@ redis_fragment_argx(struct msg *r, struct server_pool *pool, struct rack *rack,
         } else {
             NOT_REACHED();
         }
-        if (status != NC_OK) {
+        if (status != DN_OK) {
             dn_free(sub_msgs);
             return status;
         }

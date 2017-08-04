@@ -35,7 +35,8 @@
 #define MAX_ALLOWABLE_PROCESSED_MSGS  500
 
 typedef void (*func_msg_parse_t)(struct msg *);
-typedef rstatus_t (*func_msg_fragment_t)(struct msg *, uint32_t, struct msg_tqh *);
+typedef rstatus_t (*func_msg_fragment_t)(struct msg *, struct server_pool *,
+                                         struct rack *, struct msg_tqh *);
 typedef rstatus_t (*func_msg_post_splitcopy_t)(struct msg *);
 typedef void (*func_msg_coalesce_t)(struct msg *r);
 typedef rstatus_t (*msg_response_handler_t)(struct msg *req, struct msg *rsp);
@@ -322,6 +323,10 @@ get_msg_routing_string(msg_routing_t route)
     return "INVALID MSG ROUTING TYPE";
 }
 
+struct keypos {
+    uint8_t              *start;          /* key start pos */
+    uint8_t              *end;            /* key end pos */
+};
 
 struct msg {
     object_type_t        object_type;
@@ -367,6 +372,7 @@ struct msg {
 
     struct msg           *frag_owner;     /* owner of fragment message */
     uint32_t             nfrag;           /* # fragment */
+    uint32_t             nfrag_done;      /* # fragment done */
     uint64_t             frag_id;         /* id of fragmented message */
     struct msg           **frag_seq;      /* sequence of fragment message, map from keys to fragments*/
 

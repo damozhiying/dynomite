@@ -150,10 +150,9 @@ static struct rbtree tmo_rbt;    /* timeout rbtree */
 static struct rbnode tmo_rbs;    /* timeout rbtree sentinel */
 static size_t alloc_msgs_max;	 /* maximum number of allowed allocated messages */
 uint8_t g_timeout_factor = 1;
-func_mbuf_copy_t     g_pre_splitcopy;   /* message pre-split copy */
-func_msg_post_splitcopy_t g_post_splitcopy;  /* message post-split copy */
 func_msg_coalesce_t  g_pre_coalesce;    /* message pre-coalesce */
 func_msg_coalesce_t  g_post_coalesce;   /* message post-coalesce */
+func_msg_fragment_t  g_fragment;
 
 #define DEFINE_ACTION(_name) string(#_name),
 static struct string msg_type_strings[] = {
@@ -181,18 +180,14 @@ set_datastore_ops(void)
 {
     switch(g_data_store) {
         case DATA_REDIS:
-            g_pre_splitcopy = redis_pre_splitcopy;
-            g_post_splitcopy = redis_post_splitcopy;
             g_pre_coalesce = redis_pre_coalesce;
             g_post_coalesce = redis_post_coalesce;
             g_fragment =  redis_fragment;
             break;
         case DATA_MEMCACHE:
-            g_pre_splitcopy = memcache_pre_splitcopy;
-            g_post_splitcopy = memcache_post_splitcopy;
             g_pre_coalesce = memcache_pre_coalesce;
             g_post_coalesce = memcache_post_coalesce;
-            g_fragment =  NULL;
+            g_fragment =  memcache_fragment;
             break;
         default:
             return;
@@ -350,15 +345,13 @@ done:
         return NULL;
     }
 
-    msg->key_start = NULL;
-    msg->key_end = NULL;
-
     msg->vlen = 0;
     msg->end = NULL;
 
     msg->frag_owner = NULL;
     msg->frag_seq = NULL;
     msg->nfrag = 0;
+    msg->nfrag_done = 0;
     msg->frag_id = 0;
 
     msg->narg_start = NULL;
@@ -468,8 +461,6 @@ msg_clone(struct msg *src, struct mbuf *mbuf_start, struct msg *target)
     target->expect_datastore_reply = src->expect_datastore_reply;
     target->swallow = src->swallow;
     target->type = src->type;
-    target->key_start = src->key_start;
-    target->key_end = src->key_end;
     target->mlen = src->mlen;
     target->pos = src->pos;
     target->vlen = src->vlen;
@@ -726,7 +717,7 @@ msg_get_key(struct msg *req, const struct string *hash_tag, uint32_t *keylen)
     *keylen = 0;
     if (array_n(req->keys) == 0)
         return NULL;
-    kpos = array_get(req->keys, 0);
+    struct keypos *kpos = array_get(req->keys, 0);
     *keylen = (uint32_t)(kpos->end - kpos->start);
     key = kpos->start;
     /*if (!string_empty(hash_tag)) {
@@ -833,108 +824,6 @@ msg_parsed(struct context *ctx, struct conn *conn, struct msg *msg)
 }
 
 static rstatus_t
-msg_fragment(struct context *ctx, struct conn *conn, struct msg *msg)
-{
-    rstatus_t status;  /* return status */
-    struct msg *nmsg;  /* new message */
-    struct mbuf *nbuf; /* new mbuf */
-
-    ASSERT((conn->type == CONN_CLIENT) ||
-           (conn->type == CONN_DNODE_PEER_CLIENT));
-    ASSERT(msg->is_request);
-
-    nbuf = mbuf_split(&msg->mhdr, msg->pos, g_pre_splitcopy, msg);
-    if (nbuf == NULL) {
-        return DN_ENOMEM;
-    }
-
-    status = g_post_splitcopy(msg);
-    if (status != DN_OK) {
-        mbuf_put(nbuf);
-        return status;
-    }
-
-    nmsg = msg_get(msg->owner, msg->is_request, __FUNCTION__);
-    if (nmsg == NULL) {
-        mbuf_put(nbuf);
-        return DN_ENOMEM;
-    }
-    mbuf_insert(&nmsg->mhdr, nbuf);
-    nmsg->pos = nbuf->pos;
-
-    /* update length of current (msg) and new message (nmsg) */
-    nmsg->mlen = mbuf_length(nbuf);
-    msg->mlen -= nmsg->mlen;
-
-    /*
-     * Attach unique fragment id to all fragments of the message vector. All
-     * fragments of the message, including the first fragment point to the
-     * first fragment through the frag_owner pointer. The first_fragment and
-     * last_fragment identify first and last fragment respectively.
-     *
-     * For example, a message vector given below is split into 3 fragments:
-     *  'mget key1 key2 key3\r\n'
-     *  Or,
-     *  '*4\r\n$4\r\nmget\r\n$4\r\nkey1\r\n$4\r\nkey2\r\n$4\r\nkey3\r\n'
-     *
-     *   +--------------+
-     *   |  msg vector  |
-     *   |(original msg)|
-     *   +--------------+
-     *
-     *       frag_owner         frag_owner
-     *     /-----------+      /------------+
-     *     |           |      |            |
-     *     |           v      v            |
-     *   +--------------------+     +---------------------+
-     *   |   frag_id = 10     |     |   frag_id = 10      |
-     *   | first_fragment = 1 |     |  first_fragment = 0 |
-     *   | last_fragment = 0  |     |  last_fragment = 0  |
-     *   |     nfrag = 3      |     |      nfrag = 0      |
-     *   +--------------------+     +---------------------+
-     *               ^
-     *               |  frag_owner
-     *               \-------------+
-     *                             |
-     *                             |
-     *                  +---------------------+
-     *                  |   frag_id = 10      |
-     *                  |  first_fragment = 0 |
-     *                  |  last_fragment = 1  |
-     *                  |      nfrag = 0      |
-     *                  +---------------------+
-     *
-     *
-     */
-    if (msg->frag_id == 0) {
-        msg->frag_id = msg_gen_frag_id();
-        msg->first_fragment = 1;
-        msg->nfrag = 1;
-        msg->frag_owner = msg;
-    }
-    nmsg->frag_id = msg->frag_id;
-    msg->last_fragment = 0;
-    nmsg->last_fragment = 1;
-    nmsg->frag_owner = msg->frag_owner;
-    msg->frag_owner->nfrag++;
-
-    if (!conn->dyn_mode) {
-       stats_pool_incr(ctx, fragments);
-    } else {
-        
-    }
-
-    if (log_loggable(LOG_VERB)) {
-       log_debug(LOG_VERB, "fragment msg into %"PRIu64" and %"PRIu64" frag id "
-              "%"PRIu64"", msg->id, nmsg->id, msg->frag_id);
-    }
-
-    conn_recv_done(ctx, conn, msg, nmsg);
-
-    return DN_OK;
-}
-
-static rstatus_t
 msg_repair(struct context *ctx, struct conn *conn, struct msg *msg)
 {
     struct mbuf *nbuf;
@@ -967,11 +856,6 @@ msg_parse(struct context *ctx, struct conn *conn, struct msg *msg)
     case MSG_PARSE_OK:
         //log_debug(LOG_VVERB, "MSG_PARSE_OK");
         status = msg_parsed(ctx, conn, msg);
-        break;
-
-    case MSG_PARSE_FRAGMENT:
-        //log_debug(LOG_VVERB, "MSG_PARSE_FRAGMENT");
-        status = msg_fragment(ctx, conn, msg);
         break;
 
     case MSG_PARSE_REPAIR:
