@@ -165,8 +165,8 @@ int
 print_req(FILE *stream, struct msg *req)
 {
     struct string *req_type = msg_type_string(req->type);
-    return fprintf(stream, "<REQ %p %lu:%lu %.*s>", req, req->id, req->parent_id,
-                   req_type->len, req_type->data);
+    return fprintf(stream, "<REQ %p %lu:%lu::%lu %.*s>", req, req->id, req->parent_id,
+                   req->frag_id, req_type->len, req_type->data);
 }
 
 int
@@ -369,8 +369,6 @@ done:
     msg->expect_datastore_reply = 1;
     msg->done = 0;
     msg->fdone = 0;
-    msg->first_fragment = 0;
-    msg->last_fragment = 0;
     msg->swallow = 0;
     msg->dnode_header_prepended = 0;
     msg->rsp_sent = 0;

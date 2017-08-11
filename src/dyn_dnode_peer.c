@@ -1078,12 +1078,13 @@ dnode_peer_idx_for_key_on_rack(struct server_pool *pool, struct rack *rack,
     //loga("found idx %d for rack '%.*s' ", idx, rack->name->len, rack->name->data);
 
     //TODOs: should reuse the token
-    if (token != NULL) {
-        deinit_dyn_token(token);
-        dn_free(token);
-        return 0;// TODO, how to return error
+    //TODOs: token can be null, return error here
+    if (token == NULL) {
+        return 0;
     }
     uint32_t idx = vnode_dispatch(rack->continuum, rack->ncontinuum, token);
+    deinit_dyn_token(token);
+    dn_free(token);
     return idx;
 
 }

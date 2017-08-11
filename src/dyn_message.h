@@ -384,8 +384,6 @@ struct msg {
     unsigned             expect_datastore_reply:1;       /* expect datastore reply */
     unsigned             done:1;          /* done? */
     unsigned             fdone:1;         /* all fragments are done? */
-    unsigned             first_fragment:1;/* first fragment? */
-    unsigned             last_fragment:1; /* last fragment? */
     unsigned             swallow:1;       /* swallow response? */
     /* We need a way in dnode_rsp_send_next to remember if we already
      * did a dmsg_write of a dnode header in this message. If we do not remember it,
@@ -468,6 +466,7 @@ bool req_done(struct conn *conn, struct msg *msg);
 bool req_error(struct conn *conn, struct msg *msg);
 struct msg *req_recv_next(struct context *ctx, struct conn *conn, bool alloc);
 void req_recv_done(struct context *ctx, struct conn *conn, struct msg *msg, struct msg *nmsg);
+rstatus_t req_make_reply(struct context *ctx, struct conn *conn, struct msg *req);
 struct msg *req_send_next(struct context *ctx, struct conn *conn);
 void req_send_done(struct context *ctx, struct conn *conn, struct msg *msg);
 

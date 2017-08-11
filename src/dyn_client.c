@@ -962,8 +962,7 @@ req_recv_done(struct context *ctx, struct conn *conn,
         return;
     }
 
-    // TODO: work on this
-    //status = req_make_reply(ctx, conn, req);
+    status = req_make_reply(ctx, conn, req);
     if (status != DN_OK) {
         if (req->expect_datastore_reply) {
             conn_enqueue_outq(ctx, conn, req);
@@ -976,6 +975,7 @@ req_recv_done(struct context *ctx, struct conn *conn,
         tmsg = TAILQ_NEXT(sub_msg, m_tqe);
 
         TAILQ_REMOVE(&frag_msgq, sub_msg, m_tqe);
+        log_info("Forwarding split request %M", sub_msg);
         req_forward(ctx, conn, sub_msg);
     }
     ASSERT(TAILQ_EMPTY(&frag_msgq));
