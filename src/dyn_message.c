@@ -172,7 +172,7 @@ print_req(FILE *stream, struct msg *req)
 int
 print_rsp(FILE *stream, struct msg *rsp)
 {
-    return fprintf(stream, "<RSP %p %lu:%lu>", rsp, rsp->id, rsp->parent_id);
+    return fprintf(stream, "<RSP %p %lu:%lu len:%lu>", rsp, rsp->id, rsp->parent_id, rsp->mlen);
 }
 
 void
@@ -657,7 +657,7 @@ msg_dump(struct msg *msg)
         uint8_t *p, *q;
         long int len;
 
-        p = mbuf->start;
+        p = mbuf->pos;
         q = mbuf->last;
         len = q - p;
 

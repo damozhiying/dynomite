@@ -2464,7 +2464,8 @@ redis_copy_bulk(struct msg *dst, struct msg *src, bool log)
                 log_notice("stealing mbuf");
         } else {                             /* split it */
             if (dst != NULL) {
-                log_notice("appending mbuf");
+                if (log)
+                    log_notice("appending mbuf");
                 status = msg_append(dst, mbuf->pos, len);
                 if (status != DN_OK) {
                     return status;
@@ -2614,6 +2615,7 @@ redis_post_coalesce_mget(struct msg *request)
     rstatus_t status;
     uint32_t i;
 
+    // -1 is because mget is also counted in narg. So the response will be 1 less
     status = msg_prepend_format(response, "*%d\r\n", request->narg - 1);
     if (status != DN_OK) {
         /*
@@ -2633,9 +2635,9 @@ redis_post_coalesce_mget(struct msg *request)
             return;
         }
         //TODO: check if the selected rsp is an error or what?
-        log_notice("copy bulk");
-        msg_dump(sub_msg);
-        status = redis_copy_bulk(response, sub_msg, true);
+        //log_notice("copy bulk");
+        //msg_dump(sub_msg);
+        status = redis_copy_bulk(response, sub_msg, false);
         if (status != DN_OK) {
             log_warn("marking %M as error", response->owner);
             response->owner->err = 1;
@@ -2662,7 +2664,7 @@ redis_post_coalesce(struct msg *req)
         return;
     }
 
-    log_notice("Post coalesce %M", req);
+    //log_notice("Post coalesce %M", req);
     switch (req->type) {
     case MSG_REQ_REDIS_MGET:
         return redis_post_coalesce_mget(req);
